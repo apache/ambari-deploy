@@ -1,0 +1,53 @@
+# Basic Configuration
+Port 22
+AddressFamily any
+ListenAddress 0.0.0.0
+Protocol 2
+
+# Host Keys
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+# Logging Configuration
+SyslogFacility AUTH
+LogLevel INFO
+
+# Authentication Configuration
+LoginGraceTime 2m
+PermitRootLogin yes
+StrictModes yes
+MaxAuthTries 6
+MaxSessions 10
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+
+# Password Authentication
+PermitEmptyPasswords no
+PasswordAuthentication yes
+ChallengeResponseAuthentication no
+
+# PAM Configuration
+UsePAM yes
+X11Forwarding no
+
+# Connection Settings
+ClientAliveInterval 300
+ClientAliveCountMax 3
+LoginGraceTime 2m
+PermitTTY yes
+PrintMotd no
+TCPKeepAlive yes
+UseDNS no
+
+# SFTP Configuration
+Subsystem sftp /usr/libexec/openssh/sftp-server
+
+# Security Settings
+IgnoreRhosts yes
+HostbasedAuthentication no
+PermitUserEnvironment no
+
+# Limit Settings
+MaxStartups 10:30:100
+Banner none

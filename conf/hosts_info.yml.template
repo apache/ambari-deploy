@@ -1,0 +1,7 @@
+# List of all machines. For automated installation, a user and password must be provided for passwordless login.
+# If using a non-root user, sudo privileges are required.
+user: admin
+hosts:
+ - 10.1.1.10 server0 password0
+ - 10.1.1.12 server1 password2
+ - 10.1.1.13 server2 password3

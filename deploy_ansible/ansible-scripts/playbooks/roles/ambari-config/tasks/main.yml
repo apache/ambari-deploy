@@ -1,0 +1,155 @@
+#
+# # Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+---
+- name: Load variables
+  include_vars: "{{ item }}"
+  with_first_found:
+    - files:
+        - "{{ ansible_os_family|lower }}-{{ ansible_distribution|lower }}-{{ ansible_distribution_major_version }}.yml"
+        - "{{ ansible_os_family|lower }}-{{ ansible_distribution|lower }}-{{ ansible_distribution_version }}.yml"
+        - "{{ ansible_os_family|lower }}-{{ ansible_distribution|lower }}.yml"
+        - "{{ ansible_os_family|lower }}-{{ ansible_distribution_major_version }}.yml"
+        - "{{ ansible_os_family|lower | replace(' ', '_')}}.yml"
+        - defaults.yml
+      paths:
+        - ../ambari-config/vars
+
+- name: Set the GPL Licensed setting in Ambari
+  lineinfile:
+    path: /etc/ambari-server/conf/ambari.properties
+    backup: no
+    state: present
+    regexp: "^gpl.license.accepted.*"
+    line: "gpl.license.accepted={{ (accept_gpl|default(omit)|bool == true) | ternary('true', 'false') }}"
+
+- name: Attempt to change the default Ambari admin password
+  uri:
+    url: http://{{ ansible_fqdn }}:{{ ambari_server_port | default(8080) }}/api/v1/users/admin
+    method: PUT
+    force_basic_auth: yes
+    user: "{{ ambari_options.ambari_admin_user }}"
+    password: "{{ ambari_options.ambari_admin_default_password }}"
+    headers: '{"X-Requested-By":"ambari"}'
+    body: " {\"Users\":{ \"password\":\"{{ ambari_options.ambari_admin_password }}\", \"old_password\":\"{{ ambari_options.ambari_admin_default_password }}\"}}"
+    body_format: raw
+    status_code: 200,201,202,403
+    return_content: no
+  when: ambari_options.ambari_admin_user == 'admin' and ambari_options.ambari_admin_password != ambari_options.ambari_admin_default_password
+
+
+#- block:
+#    - name: Set the HDP Search mpack filename
+#      set_fact:
+#        mpack_filename: "solr-service-mpack-{{ hdpsearch_version }}.tar.gz"
+#
+#    - name: "Install the HDP Search Management Pack"
+#      shell: "echo yes | ambari-server install-mpack --mpack={{ repo_base_url }}/HDP-SOLR/hdp-solr-ambari-mp/{{ mpack_filename }}"
+#      notify: Restart ambari-server
+#      args:
+#        creates: "/var/lib/ambari-server/resources/mpacks/solr-ambari-mpack-{{ hdpsearch_version }}"
+#  when: install_hdpsearch is defined and install_hdpsearch
+
+- name: generate version_definitions request body
+  set_fact:
+    ambari_stack: "BIGTOP-{{ stack_version | string }}"
+
+- name: version_definitions
+  uri:
+    url: http://{{ ansible_fqdn }}:{{ ambari_server_port | default(8080) }}/api/v1/version_definitions
+    method: POST
+    force_basic_auth: yes
+    user: "{{ ambari_options.ambari_admin_user }}"
+    password: "{{ ambari_options.ambari_admin_password }}"
+    headers: '{"X-Requested-By":"ambari"}'
+    body: " {\"VersionDefinition\":{ \"available\":\"{{ ambari_stack }}\"}}" #body 的json 前加了一个空格就好了，否则会报错
+    body_format: raw
+    status_code: 200,201,202
+    timeout: 120
+    return_content: yes
+  ignore_errors: true
+
+
+
+- name: Generate the cluster repo
+  set_fact:
+    ambari_repo: "{{ (repos | selectattr('name', 'match', '^ambari_repo') | first).url }}"
+
+- name: Generate the cluster repo_version_update_body
+  set_fact:
+    repo_version_update_body: "{{ lookup('template', 'repo_version_template.json.j2', convert_data=False) }}"
+
+- name: Update repo_version model to set ambari_managed_repositories
+  uri:
+    url: http://{{ ansible_fqdn }}:{{ ambari_server_port | default(8080) }}/api/v1/stacks/BIGTOP/versions/{{ stack_version }}/repository_versions/1
+    method: PUT
+    force_basic_auth: yes
+    user: "{{ ambari_options.ambari_admin_user }}"
+    password: "{{ ambari_options.ambari_admin_password }}"
+    headers: '{"X-Requested-By":"ambari"}'
+    body: "{{ repo_version_update_body|to_json }} "
+    body_format: raw
+    status_code: 200,201,202
+    timeout: 120
+    return_content: yes
+
+- name: Make sure all of the Ambari Agents have registered
+  uri:
+    url: http://{{ ansible_fqdn }}:{{ ambari_server_port | default(8080) }}/api/v1/hosts/{{ hostvars[item]['ansible_fqdn']|lower }}
+    method: GET
+    force_basic_auth: yes
+    user: "{{ ambari_options.ambari_admin_user }}"
+    password: "{{ ambari_options.ambari_admin_password }}"
+    headers: '{"X-Requested-By":"ambari"}'
+    status_code: 200,201,202,404
+    return_content: no
+  with_items: "{{ groups['hadoop-cluster'] }}"
+  register: result
+  until: "result.status != 404"
+  retries: 100
+  delay: 5
+
+
+#- name: Install ambari bigtop mapck
+#  package:
+#    name: bigtop-ambari-mpack
+#    update_cache: yes
+#    state: latest
+- name: Create  Ambari Mpack  directory
+  file:
+    path: "/usr/lib/bigtop-ambari-mpack/"
+    state: directory
+  when: should_deploy_ambari_mpack
+
+- name: distribute Ambari Mpack  script
+  copy:
+    src: ambari-mpack.tar.gz
+    dest: "/usr/lib/bigtop-ambari-mpack/"
+  when: should_deploy_ambari_mpack
+
+- name: Find ambari-mpack*.tar.gz file
+  find:
+    paths: "/usr/lib/bigtop-ambari-mpack/"
+    patterns: "ambari-mpack*.tar.gz"
+  register: mpack_files
+  when: should_deploy_ambari_mpack
+
+- name: Install mpack to Ambari server
+  shell: ambari-server install-mpack -s --purge --verbose --mpack={{ mpack_files.files.0.path }}
+  when: should_deploy_ambari_mpack and mpack_files.files | length > 0
+  notify: Restart ambari-server
