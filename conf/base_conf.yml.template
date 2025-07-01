@@ -1,0 +1,59 @@
+default_password: 'B767610qa4Z'                          # a default password for all required passwords which are not specified in the blueprint,
+
+#fill disk dirs
+data_dirs: ["/data/sdv1"]
+
+# Repository configurations
+http_repo_port: 8881                                    # Port for HTTP repository service, default is 8881
+repos:
+  - {"name": "ambari_repo", "url": "file:///vagrant_data/centos9/"} # For docker deployment, you can configure the local directory containing big data components
+  # - {"name": "ambari_repo", "url": "http://localhost:8888/centos9/"} # Local yum repository address for Ambari-related big data components
+
+#repo_pkgs_dir: "/data1/apache/ambari-3.0_pkgs" # Local packages directory path for creating repository
+
+# Machines to deploy. For Docker deployment, this can be left unchanged as it's automatically generated.
+hosts:
+  - 192.168.56.10 vm1 B767610qa4Z
+  - 192.168.56.11 vm2 B767610qa4Z
+  - 192.168.56.12 vm3 B767610qa4Z
+  - 192.168.56.13 vm4 B767610qa4Z
+user: root
+
+stack_version: '3.3.0'
+  #components_to_install: ["ambari","nightingale","victoriametrics"]
+#components_to_install: ["hbase","hdfs","yarn","hive","zookeeper","ambari","ambari_metrics","nightingale","victoriametrics"]
+
+# Components to install, remove if not needed
+components_to_install: ["infra_solr","hbase","hdfs","yarn","hive","zookeeper","kafka","spark","flink","ranger","ranger_kms","superset","sqoop","cloudbeaver","ambari","ambari_metrics","celeborn","kyuubi","knox","alluxio","trino","dolphinscheduler","nightingale","victoriametrics"]
+
+cluster_name: 'cluster'
+hdfs_ha_name: 'ambari-cluster'
+ansible_ssh_port: 22
+
+# The program will automatically generate docker compose file based on this configuration
+# and expose the ports of the corresponding docker nodes
+docker_options:
+  instance_num: 4
+  memory_limit: "23g"
+  enable_local_repo: true
+  components_port_map:
+    AMBARI_SERVER: 8080
+#    NAMENODE: 50070
+#    RESOURCEMANAGER: 8088
+#    HBASE_MASTER: 16010
+#    FLINK_HISTORYSERVER: 8082
+#    RANGER_ADMIN: 6080
+  distro:
+    name: "centos"
+    version: 8
+
+
+# Basic resource parameters to prevent default parameters from consuming too much Docker resources
+hbase_heapsize: 1024
+hadoop_heapsize: 1024
+hive_heapsize: 1024
+infra_solr_memory: 1024
+spark_daemon_memory: 1024
+zookeeper_heapsize: 1024
+yarn_heapsize: 1024
+alluxio_memory: 1024

@@ -1,0 +1,150 @@
+"""
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+"""
+
+from python.config_management.dynamic_variable_generator import DynamicVariableGenerator
+from python.config_management.service_manager import *
+from python.config_management.service_map import *
+from python.config_management.template_renderer import *
+
+from .base_configuration import *
+
+
+class AmbariBluePrintConfiguration(BaseConfiguration):
+    def __init__(
+        self,
+        name,
+        dynamic_variable_generator: DynamicVariableGenerator,
+        service_manager: ServiceManager,
+        stack_version,
+    ):
+        self.service_manager = service_manager
+        self.dynamic_variable_generator = dynamic_variable_generator
+        self.stack_version = stack_version
+        super().__init__(name)
+
+    def get_rendered_advanced_conf(self):
+        rendered_advanced_conf = self.dynamic_variable_generator.generate()
+        return rendered_advanced_conf
+
+    def get_conf_j2template_path(self, service_name):
+        service_key = ServiceMap.get_service_key_from_service(service_name)
+        file_name = f"{service_key}_configuration.json.j2"
+        return os.path.join(CLUSTER_TEMPLATES_DIR, file_name)
+
+    def generate_blueprint_configurations(self):
+        rendered_conf = self.get_rendered_advanced_conf()
+        services_need_install = self.service_manager.get_services_need_install()
+        configurations = []
+        processed_services = []
+
+        for service_name in services_need_install:
+            service_key = ServiceMap.get_service_key_from_service(service_name)
+            if service_key in processed_services:
+                continue
+
+            template_render = TemplateRenderer()
+            tpl_str = FileManager.read_file(
+                self.get_conf_j2template_path(service_name), FileManager.FileType.RAW
+            )
+
+            if not tpl_str:
+                continue
+
+            service_confs = template_render.render_template(
+                tpl_str, rendered_conf
+            ).decode_result(decoder="json")
+
+            if service_confs:
+                configurations.extend(
+                    [{k: v} for k, v in service_confs.items() if isinstance(v, dict)]
+                )
+            else:
+                logger.error(
+                    f"Error in configuration template for service {service_name}"
+                )
+
+            processed_services.append(service_key)
+
+        return configurations
+
+    def generate_blueprint_host_groups(self):
+        rendered_conf = self.get_rendered_advanced_conf()
+        host_groups = []
+        services_need_install = self.service_manager.get_services_need_install()
+        all_services_clients = self.service_manager.get_service_clients_need_install(
+            services_need_install
+        )
+
+        for group_name, services in rendered_conf["group_services"].items():
+            group_services = list(set(services + all_services_clients))
+            host_group_components_config = [
+                {"name": service_name} for service_name in group_services
+            ]
+
+            host_group = {
+                "name": group_name,
+                "configurations": [],
+                "cardinality": "1",
+                "components": host_group_components_config,
+            }
+            host_groups.append(host_group)
+
+        return host_groups
+
+    def generate_ambari_blueprint(
+        self, blueprint_configurations, blueprint_service_host_groups
+    ):
+        rendered_conf = self.get_rendered_advanced_conf()
+        security = rendered_conf.get("security")
+        blueprint_security = (
+            "KERBEROS" if security.strip().lower() != "none" else "NONE"
+        )
+        ambari_repo_url = rendered_conf.get("ambari_repo_url")
+
+        j2_context = {
+            "blueprint_security": blueprint_security,
+            "ambari_blueprint_configurations": json.dumps(blueprint_configurations),
+            "ambari_blueprint_host_groups": json.dumps(blueprint_service_host_groups),
+            "ambari_repo_url": ambari_repo_url,
+        }
+
+        template_renderer = TemplateRenderer()
+
+        blueprint_json = template_renderer.render_template(
+            FileManager.read_file(
+                os.path.join(CLUSTER_TEMPLATES_DIR, "base_blueprint.json.j2"),
+                FileManager.FileType.RAW,
+            ),
+            j2_context,
+        ).decode_result()
+
+        blueprint_json["Blueprints"]["stack_version"] = self.stack_version
+
+        self.conf = blueprint_json
+
+    def get_conf(self):
+        blueprint_configurations = self.generate_blueprint_configurations()
+        blueprint_service_host_groups = self.generate_blueprint_host_groups()
+        self.generate_ambari_blueprint(
+            blueprint_configurations, blueprint_service_host_groups
+        )
+        return self.conf
+
+    def save(self):
+        self.set_path(BLUEPRINT_FILES_DIR).set_format(FileManager.FileType.JSON)
+        super().save()

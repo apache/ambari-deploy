@@ -1,0 +1,63 @@
+#
+# # Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+---
+#设置时区
+- name: Set timezone to "{{ timezone }}"
+  timezone:
+    name: "{{ timezone }}"
+
+
+# 配置打开文件数限制
+- name: set limit
+  shell: 'sed -i "s/^fs.file-max.*/fs.file-max=6553600/g" /etc/sysctl.conf && sed -i "s/^fs.nr_open.*/fs.nr_open=6553600/g" /etc/sysctl.conf && /usr/sbin/sysctl -p && sed -i "s/^\*.*//g" /etc/security/limits.conf && echo "* soft nofile 655350" >> /etc/security/limits.conf && echo "* hard nofile 655350" >> /etc/security/limits.conf && echo "* soft nproc 655350" >> /etc/security/limits.conf && echo "* hard nproc 655350" >> /etc/security/limits.conf && echo "*  soft  memlock 5242880" >> /etc/security/limits.conf && echo "*  hard  memlock 5242880" >> /etc/security/limits.conf'
+  ignore_errors: True
+
+- name: modify nproc.conf
+  shell: 'sed -i "s/^\*.*/*          soft    nproc     655350/g" /etc/security/limits.d/20-nproc.conf'
+  when: ansible_os_family|lower == "redhat" and ansible_distribution_major_version|int == 7
+
+# 创建大数据集群的用户，ambari run user 等
+- name: create user
+  user: name={{ item.user }}
+  with_items:
+    - { user: '{{ ambari_options.ambari_agent_run_user }}' }
+    - { user: '{{ ambari_options.ambari_server_run_user }}' }
+  ignore_errors: True
+
+#给用户配置sudo权限
+- name: Config /etc/sudoers
+  shell: "{{ item }}"
+  with_items:
+    - "echo '{{ ambari_options.ambari_agent_run_user }} ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers"
+
+
+
+# todo 使用外部Kdc 需要创建host 映射
+- name: add kadmin host
+  lineinfile:
+    path: /etc/hosts
+    line: "{{security_options.external_hostip}} {{security_options.external_hostname}}"
+  when: security == 'mit-kdc' and security_options.external_hostname != ''
+
+
+# 创建keytab文件目录
+- name: mkdir /etc/security/keytabs
+  file:
+    path: /etc/security/keytabs
+    state: directory

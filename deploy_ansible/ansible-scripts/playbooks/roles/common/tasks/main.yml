@@ -1,0 +1,199 @@
+#
+# # Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+---
+
+- name: Load variables
+  include_vars: "{{ item }}"
+  with_first_found:
+    - files:
+        - "{{ ansible_os_family|lower }}-{{ ansible_distribution|lower }}-{{ ansible_distribution_major_version }}.yml"
+        - "{{ ansible_os_family|lower }}-{{ ansible_distribution|lower }}-{{ ansible_distribution_version }}.yml"
+        - "{{ ansible_os_family|lower }}-{{ ansible_distribution|lower }}.yml"
+        - "{{ ansible_os_family|lower }}-{{ ansible_distribution_major_version }}.yml"
+        - "{{ ansible_os_family|lower | replace(' ', '_')}}.yml"
+        - defaults.yml
+      paths:
+        - ../common/vars
+
+- name: 使用wait_for模块测试SSH连通性
+  wait_for:
+    host: "{{ inventory_hostname }}"
+    port: 22
+    state: started
+    timeout: 10  # 可以根据需要调整超时时间
+  ignore_errors: yes  # 忽略连接失败的错误，方便在后续统计连接失败的主机
+  register: ssh_connectivity_result
+
+- name: 检查SSH连通性测试结果并抛出错误
+  block:
+    - name: 显示SSH连通性测试结果
+      debug:
+        msg: "主机 {{ inventory_hostname }} SSH 连通性测试结果: {{ '成功' if ssh_connectivity_result.elapsed|default(-1) >= 0 else '失败' }}"
+    - name: 抛出错误，如果有连接失败的机器
+      fail:
+        msg: "连接失败：主机 {{ inventory_hostname }} 无法建立SSH连接！"
+      when: ssh_connectivity_result.elapsed is undefined or ssh_connectivity_result.elapsed < 0
+
+
+- name: Add APT repositories
+  apt_repository:
+    repo: "deb [trusted=yes] {{ ambari_repo_url }} jammy main"
+    filename: "ambari_auto_deploy"
+    state: present
+    update_cache: false
+  when: ansible_os_family|lower == "debian"
+
+- name: Clear APT cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 0
+  ignore_errors: true
+  when: ansible_os_family|lower == "debian"
+
+- name: Add YUM repository
+  yum_repository:
+    name: "ambari_auto_deploy"
+    description: "Ambari Repository"
+    baseurl: "{{ ambari_repo_url }}"
+    file: "ambari_auto_deploy"
+    state: present
+    gpgcheck: no
+  when: ansible_os_family|lower != "debian"
+
+- name: Clean YUM cache and make cache
+  block:
+    - name: Clean YUM metadata
+      command: yum clean metadata
+      
+    - name: Clean YUM packages
+      command: yum clean packages
+      
+    - name: Make YUM cache
+      command: yum makecache
+  when: ansible_os_family|lower != "debian"
+
+
+
+- name: Remove existing ansible_tmp_dir  {{ ansible_tmp_dir }}
+  file:
+    path: "{{ ansible_tmp_dir }}"
+    state: absent
+
+- name: Create  "{{ ansible_tmp_dir }}" directory
+  file:
+    path: "{{ ansible_tmp_dir }}"
+    state: directory
+
+
+- name: Install os required packages
+  package:
+    name: "{{ item }}"
+    state: present
+  with_items: "{{ packages | join(',') }}"
+
+
+
+#todo 没网的情况下暂时无法安装
+#- name: Install python env required modules
+#  pip:
+#    executable: pip3
+#    name: "{{ item }}"
+#  with_items: "{{ py3_modules | join(',') }}"
+
+#todo 这里有问题，先关闭 防火墙和selinux ，然后装包，否则会被防火墙block住 reposerver
+
+# 给所有主机linux 进行必要配置，关闭防火墙，透明大页，SElinux ,设置swap, nproc, vm，创建用户等
+- include_tasks: node_setup.yml
+
+- name: distribute cluster_clear script
+  copy:
+    src: cluster_clear.py
+    dest: "{{ ansible_tmp_dir }}"
+
+
+#cluster_clear 依赖 psmisc , 需要先安装
+- name: Execute cluster clear script
+  become: yes
+  become_user: root
+  become_method: sudo
+  shell: 'python3 {{ansible_tmp_dir}}/cluster_clear.py bigtop {{ data_dirs | join(",") }} {{ ansible_os_family|lower }}'
+  register: script_result
+  ignore_errors: yes
+  when: not (skip_cluster_clear is defined and skip_cluster_clear)
+
+- name: Print stdout and fail the task if script failed
+  ansible.builtin.fail:
+    msg: "Script execution failed: {{ script_result.stdout }}"
+  when: script_result is defined and script_result.rc != 0
+  ignore_errors: yes
+
+- name: Print result to log
+  ansible.builtin.shell: 'echo "{{ script_result.stdout }}" | tee -a /tmp/cluster_clear.log'
+  when: script_result is defined and script_result.rc == 0
+  ignore_errors: yes
+
+- name: Include ntp_setup
+  include_tasks: ntp_setup.yml
+  when: ansible_os_family | lower != "debian"
+
+
+- name: set default python
+  shell: update-alternatives --set python /usr/bin/python3
+  when: ansible_os_family|lower == "rocky" and ansible_distribution_major_version|int == 8
+
+- name: set default python
+  shell: yum install python-unversioned-command  -y
+  when: ansible_os_family|lower == "rocky" and ansible_distribution_major_version|int == 9
+
+
+
+- name: Set vm.max_map_count to 2000000 (permanent)
+  ansible.posix.sysctl:
+    name: vm.max_map_count
+    value: '2000000'
+    state: present
+    sysctl_set: yes
+    reload: yes
+  become: yes
+
+
+- name: populate /etc/profile
+  vars:
+    os_environment:
+      - key: export SQOOP_HOME
+        value: /usr/bigtop/current/sqoop
+      - key: export HADOOP_HOME
+        value: /usr/bigtop/current/hadoop-client
+#      - key: export HADOOP_CLASSPATH
+#        value: '`hadoop classpath`'
+      - key: export HBASE_HOME
+        value: /usr/bigtop/current/hbase-client
+      - key: export HIVE_HOME
+        value: /usr/bigtop/current/hive-client
+      - key: export FLINK_HOME
+        value: /usr/bigtop/current/flink-client
+      - key: export SPARK_HOME
+        value: /usr/bigtop/current/spark-client
+  lineinfile:
+    path: "/etc/profile"
+    state: present
+    regexp: "^{{ item.key }}="
+    line: "{{ item.key }}={{ item.value}}"
+  with_items: "{{ os_environment }}"
+

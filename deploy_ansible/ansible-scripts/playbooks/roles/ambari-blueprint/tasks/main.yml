@@ -1,0 +1,194 @@
+#
+# # Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+---
+- name: Load variables
+  include_vars: "{{ item }}"
+  with_first_found:
+    - files:
+        - "{{ ansible_os_family|lower }}-{{ ansible_distribution|lower }}-{{ ansible_distribution_major_version }}.yml"
+        - "{{ ansible_os_family|lower }}-{{ ansible_distribution|lower }}.yml"
+        - "{{ ansible_os_family|lower }}-{{ ansible_distribution_major_version }}.yml"
+        - "{{ ansible_os_family|lower | replace(' ', '_')}}.yml"
+        - defaults.yml
+      paths:
+        - ../ambari-blueprint/vars
+
+#- block:
+#    - name: Get the VersionDefinition id from Ambari (Ambari >= 2.6)
+#      uri:
+#        url: "http://{{ ansible_fqdn }}:8080/api/v1/version_definitions?VersionDefinition/release/version={{ (install_hdp|default(false) == true) | ternary(hdp_version,hdf_version) }}"
+#        method: GET
+#        force_basic_auth: yes
+#        user: "{{ ambari_admin_user }}"
+#        password: "{{ ambari_admin_password }}"
+#        headers: '{"X-Requested-By":"ambari"}'
+#        status_code: 200,201,202
+#        return_content: yes
+#      register: version_definition
+#
+#    - name: Fail if could not get a VersionDefinition from Ambari
+#      fail:
+#        msg: "Could not get the VersionDefinition from Ambari. The following is the received information from Ambari: {{ version_definition }}"
+#      when: (version_definition.content|from_yaml)['items'] | length == 0
+#
+#    - name: Set the VersionDefinition id (Ambari >= 2.6)
+#      set_fact:
+#        vdf_id: "{{ (version_definition.content|from_yaml)['items'][0]['VersionDefinition']['id'] }}"
+#  when: ambari_version is version_compare('2.6', '>=')
+
+- name: Check if a cluster "{{ cluster_name }}" already exists
+  uri:
+    url: "http://{{ ansible_fqdn }}:{{ ambari_server_port | default(8080) }}/api/v1/clusters/{{ cluster_name }}"
+    method: GET
+    force_basic_auth: yes
+    user: "{{ ambari_options.ambari_admin_user }}"
+    password: "{{ ambari_options.ambari_admin_password }}"
+    headers: '{"X-Requested-By":"ambari"}'
+    status_code: 200,201,202,404
+  register: cluster_check
+
+- name: Fail if a cluster "{{ cluster_name }}" already exists
+  fail:
+    msg: Cluster "{{ cluster_name }}" already exists!
+  when: cluster_check.status != 404
+
+- name: Generate the cluster static blueprint
+  set_fact:
+    cluster_blueprint: "{{ lookup('file', 'blueprint.json', convert_data=False) }}"
+
+- name: Debug blueprint content
+  debug:
+    var: cluster_blueprint
+    verbosity: 1
+
+- name: Convert blueprint to proper JSON format
+  set_fact:
+    blueprint_json: "{{ cluster_blueprint | to_json }}"
+
+- name: Debug converted JSON
+  debug:
+    var: blueprint_json
+    verbosity: 1
+
+- name: Generate the cluster creation template
+  set_fact:
+    cluster_template: "{{ lookup('file', 'cluster_template.json', convert_data=False) }}"
+
+- name: Print the cluster creation template
+  debug:
+    var: cluster_template
+    verbosity: 1
+
+- name: Delete any existing blueprint called "{{ blueprint_name }}"
+  uri:
+    url: "http://{{ ansible_fqdn }}:{{ ambari_server_port | default(8080) }}/api/v1/blueprints/{{ blueprint_name }}"
+    method: DELETE
+    force_basic_auth: yes
+    user: "{{ ambari_options.ambari_admin_user }}"
+    password: "{{ ambari_options.ambari_admin_password }}"
+    headers: '{"X-Requested-By":"ambari"}'
+    status_code: 200,201,202,404
+    return_content: no
+  when: cluster_check.status == 404
+
+- name: Upload the blueprint "{{ blueprint_name }}" to the Ambari server
+  uri:
+    url: "http://{{ ansible_fqdn }}:{{ ambari_server_port | default(8080) }}/api/v1/blueprints/{{ blueprint_name }}"
+    method: POST
+    force_basic_auth: yes
+    user: "{{ ambari_options.ambari_admin_user }}"
+    password: "{{ ambari_options.ambari_admin_password }}"
+    headers: 
+      X-Requested-By: "ambari"
+      Content-Type: "application/json"
+    body: "{{ blueprint_json }}"
+    body_format: json
+    status_code: 200,201,202,409
+    timeout: 60
+    return_content: yes
+  register: blueprint_result
+
+- name: Debug response
+  debug:
+    var: blueprint_result
+    verbosity: 1
+
+- name: Set repo_name based on ansible_os_family
+  set_fact:
+    repo_name: "{{ 'jammy' if ansible_os_family | lower == 'debian' else 'bigtop' }}"
+
+#- name: Create JSON Template with variable repo_name
+#  set_fact:
+#    json_template: "{{ '{ \"Repositories\": {\"repo_name\": \"' + repo_name + '\", \"base_url\": \"' + ambari_repo_url + '\", \"verify_base_url\": true}}' }}"
+#
+
+- name: Create JSON Template
+  set_fact:
+    json_template: '{ "Repositories": {"repo_name": "{{repo_name}}", "base_url": "{{ ambari_repo_url }}", "verify_base_url": true}}'
+
+
+- name: "Modify the  base_url repository for bigtop stack"
+  uri:
+    url: "http://{{ ansible_fqdn }}:{{ ambari_server_port | default(8080) }}/api/v1/stacks/BIGTOP/versions/{{ stack_version }}/operating_systems/{{ os_family }}/repositories/BIGTOP-{{ stack_version }}"
+    method: PUT
+    force_basic_auth: yes
+    user: "{{ ambari_options.ambari_admin_user }}"
+    password: "{{ ambari_options.ambari_admin_password }}"
+    headers: '{"X-Requested-By":"ambari"}'
+    body: "{{ json_template|to_json }} "
+    body_format: raw
+    status_code: 200,201,202
+    return_content: no
+  ignore_errors: true
+
+- name: Convert cluster template to proper JSON format
+  set_fact:
+    cluster_template_json: "{{ cluster_template | to_json }}"
+
+- name: Debug cluster template JSON
+  debug:
+    var: cluster_template_json
+    verbosity: 1
+
+- name: Launch the create cluster request
+  uri:
+    url: http://{{ ansible_fqdn }}:{{ ambari_server_port | default(8080) }}/api/v1/clusters/{{ cluster_name }}
+    method: POST
+    force_basic_auth: yes
+    user: "{{ ambari_options.ambari_admin_user }}"
+    password: "{{ ambari_options.ambari_admin_password }}"
+    headers: 
+      X-Requested-By: "ambari"
+      Content-Type: "application/json"
+    body: "{{ cluster_template_json }}"
+    body_format: json
+    status_code: 200,201,202
+    timeout: 120
+    return_content: yes
+  register: cluster_create_task
+
+- name: Debug cluster creation response
+  debug:
+    var: cluster_create_task
+    verbosity: 1
+
+- name: Check Ambari installation progress
+  debug:
+    msg: "Please check the Ambari web UI to get installation progress at: http://{{ ansible_fqdn }}:{{ ambari_server_port | default(8080) }}"
+

@@ -1,0 +1,19 @@
+{  
+  "operating_systems": [
+    {  
+      "OperatingSystems":{  
+        "ambari_managed_repositories":true,
+        "os_type":"{{ baseurl_os_family }}"
+      }, 
+      "repositories": [
+        {  
+          "Repositories": {
+            "base_url": "{{ambari_repo}}",
+            "repo_id": "AMBARI-REPO-{{stack_version}}",
+            "repo_name": "{{repo_name}}"
+          } 
+        }
+      ]
+    }
+  ] 
+}

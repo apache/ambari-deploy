@@ -1,0 +1,141 @@
+
+deploy_ambari_only: false
+prepare_nodes_only: false
+backup_old_repo: no
+should_deploy_ambari_mpack: false
+############################
+## database configuration ##
+############################
+#If an external database is used, it is necessary to manually create corresponding users for Ambari, Hive, and Ranger in the database.
+database: 'postgres'                                      # can be set to  'postgres', 'mysql'
+postgres_port: 5432
+mysql_port: 3306
+database_options:
+  repo_url: ''
+  external_hostname: ''                                   # if this is empty, Ansible will install and prepare the databases on the ambari-server node
+  ambari_db_name: 'ambari'
+  ambari_db_username: 'ambari'
+  ambari_db_password: '{{ default_password }}'
+  hive_db_name: 'hive'
+  hive_db_username: 'hive'
+  hive_db_password: '{{ default_password }}'
+
+  dolphin_db_name: 'dolphinscheduler'
+  dolphin_db_username: 'dolphin'
+  dolphin_db_password: '{{ default_password }}'
+
+  superset_db_name: 'superset'
+  superset_db_username: 'superset'
+  superset_db_password: '{{ default_password }}'
+
+  cloudbeaver_db_name: 'cloudbeaver'
+  cloudbeaver_db_username: 'cloudbeaver'
+  cloudbeaver_db_password: '{{ default_password }}'
+
+
+  nightingale_db_name: 'nightingale'
+  nightingale_db_username: 'n9e'
+  nightingale_db_password: '{{ default_password }}'
+
+
+  rangeradmin_db_name: 'ranger'
+  rangeradmin_db_username: 'ranger'
+  rangeradmin_db_password: '{{ default_password }}'
+  rangerkms_db_name: 'rangerkms'
+  rangerkms_db_username: 'rangerkms'
+  rangerkms_db_password: '{{ default_password }}'
+
+#####################################
+## kerberos security configuration ##
+#####################################
+
+security: 'none'                                         # can be set to 'none', 'mit-kdc'
+security_options:
+  external_hostname: ''                                   # if this is empty, Ansible will install and prepare the MIT KDC on the Ambari node
+  external_hostip: ''                                      # used to config /etc/hosts dns look up
+  realm: 'MY-REALM.COM'
+  admin_principal: 'admin/admin'                          # the Kerberos principal that has the permissions to create new users (don't append the realm)
+  admin_password: "{{ default_password }}"
+  kdc_master_key: "{{ default_password }}"                # only used when security is set to 'mit-kdc'
+  http_authentication: yes                                # set to yes to enable HTTP authentication (SPNEGO)
+  manage_krb5_conf: yes                                   # set to no if using FreeIPA/IdM
+
+##########################
+## ambari configuration ##
+##########################
+# ambari_server
+ambari_options:
+  ambari_agent_run_user: 'ambari'
+  ambari_server_run_user: 'ambari'
+  ambari_admin_user: 'admin'
+  ambari_admin_password: '{{ default_password }}'
+  ambari_admin_default_password: 'admin'                   # no need to change this (unless the Ambari default changes)
+  config_recommendation_strategy: 'ALWAYS_APPLY'           # choose between 'NEVER_APPLY', 'ONLY_STACK_DEFAULTS_APPLY', 'ALWAYS_APPLY', 'ALWAYS_APPLY_DONT_OVERRIDE_CUSTOM_VALUES'
+
+
+##########################
+## ranger configuration ##                                # only useful if blueprint is dynamic
+##########################
+
+ranger_options:                                           # only used if RANGER_ADMIN is part of the blueprint stack
+  enable_plugins: no                                     # set to 'yes' if the plugins should be enabled for all of the installed services
+
+ranger_security_options:                                  # only used if RANGER_ADMIN is part of the blueprint stack
+  ranger_admin_password: "{{ default_password }}"         # the password for the Ranger admin users (both admin and amb_ranger_admin)
+  ranger_keyadmin_password: "{{ default_password }}"      # the password for the Ranger keyadmin user (will only be set in HDP3, in HDP2 it will remain the default keyadmin)
+  kms_master_key_password: "{{ default_password }}"       # password used for encrypting the Master Key
+
+###########################
+## general configuration ##
+###########################
+
+external_dns: yes                                         # set to yes to use the existing DNS (when no, it will update the /etc/hosts file - must be set to 'no' when using Azure)
+disable_firewall: yes                                      # set to yes to disable the existing local firewall service (iptables, firewalld, ufw)
+timezone: Asia/Shanghai
+
+external_ntp_server_hostname: ''                     # if this is empty, ntp server will install and prepare on the ambari-server node
+packages_need_install: []
+registry_dns_bind_port: "54"
+blueprint_name: 'blueprint'         # the name of the blueprint as it will be stored in Ambari
+
+wait: true                                                 # wait for the cluster to finish installing
+wait_timeout: 60
+accept_gpl: yes                                            # set to yes to allow Ambari to install GPL licensed libraries
+
+########################
+## path configuration ##
+########################
+# Common base dirs
+base_log_dir: "/var/log"
+base_tmp_dir: "/tmp"
+
+# Services base dirs
+kafka_log_base_dir: "{% for dr in data_dirs %}{{ dr }}/kafka-logs{% if not loop.last %},{% endif %}{% endfor %}"
+ams_base_dir: "/var/lib"
+ranger_audit_hdfs_filespool_base_dir: "{{ base_log_dir }}"
+ranger_audit_solr_filespool_base_dir: "{{ base_log_dir }}"
+
+# HDFS main dirs
+hdfs_dfs_namenode_checkpoint_dir: "{{ hadoop_base_dir }}/hdfs/namesecondary"
+hdfs_dfs_namenode_name_dir: "{{ hadoop_base_dir }}/hdfs/namenode"        #one data dir
+hdfs_dfs_journalnode_edits_dir: "{{ hadoop_base_dir }}/hdfs/journalnode" #one data dir
+hdfs_dfs_datanode_data_dir: "{% for dr in data_dirs %}{{ dr }}/hadoop/hdfs/data{% if not loop.last %},{% endif %}{% endfor %}" #multiple data dir
+
+
+# YARN main dirs
+yarn_nodemanager_local_dirs: "{{ hadoop_base_dir }}/yarn/local"
+yarn_nodemanager_log_dirs: "{{ hadoop_base_dir }}/yarn/log"
+yarn_timeline_leveldb_dir: "{{ hadoop_base_dir }}/yarn/timeline"
+
+
+# Other dirs
+zookeeper_data_dir: "{{ hadoop_base_dir }}/zookeeper"
+infra_solr_datadir: "{{ hadoop_base_dir }}/ambari-infra-solr/data"
+heap_dump_location: "{{ base_tmp_dir }}"
+hive_downloaded_resources_dir: "{{ base_tmp_dir }}/hive/${hive.session.id}_resources"
+heap_dump_location: /tmp
+
+stack_major_version: 3
+
+ansible_tmp_dir: /tmp/ansible
+trino_java_home: /opt/jdk-22.0.2+9

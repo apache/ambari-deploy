@@ -1,0 +1,55 @@
+#
+# # Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+---
+postgres_version: 12
+postgres_major_version: 12
+postgres_packages:
+  - postgresql{{ postgres_major_version }}-server
+  - postgresql{{ postgres_major_version }}-libs
+  - postgresql{{ postgres_major_version }}
+
+postgres_service_name: "postgresql-{{ postgres_major_version }}"
+postgres_initdb_command: "/usr/pgsql-{{ postgres_major_version }}/bin/postgresql-{{ postgres_major_version }}-setup initdb"
+postgres_data_directory: "/var/lib/pgsql/{{ postgres_major_version }}/data"
+postgres_config_file: "{{ postgres_data_directory }}/postgresql.conf"
+postgres_hba_file: "{{ postgres_data_directory }}/pg_hba.conf"
+
+mysql_version: 5.7.32
+mysql_daemon: mysqld
+mysql_root_home: /root
+mysql_root_username: root
+mysql_root_password: root
+mysql_service_name: mysqld
+
+mysql_packages:
+  - mysql-community-server
+  - mysql-community-client
+  - MySQL-python
+
+
+
+mariadb_version: 10.2
+mariadb_packages:
+  - mariadb-server
+  - MySQL-python
+mariadb_service_name: mariadb
+mariadb_config_file: /etc/my.cnf.d/server.cnf
+
+
+osname: centos7
